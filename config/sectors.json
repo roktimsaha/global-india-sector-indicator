@@ -1,0 +1,14 @@
+{
+  "Technology": {
+    "global_symbol": "XLK",
+    "currency_weight": 0.40
+  },
+  "Banking": {
+    "global_symbol": "XLF",
+    "currency_weight": 0.05
+  },
+  "Pharma": {
+    "global_symbol": "XLV",
+    "currency_weight": 0.30
+  }
+}
