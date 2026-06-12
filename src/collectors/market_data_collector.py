@@ -1,16 +1,27 @@
 """
-Global ETF and Currency Data Collector
+Market Data Collector
 
 Purpose:
-    Downloads global sector ETF data and USD/INR currency data from Yahoo Finance
-    using yfinance, then saves the results as CSV files inside the data/ folder.
+    Downloads Indian sector index data, global sector ETF data, and USD/INR
+    currency data from Yahoo Finance using yfinance.
 
-Current symbols:
-    Global ETFs are loaded from config/sectors.json.
-    USD/INR is downloaded separately using the Yahoo Finance symbol INR=X.
+Input:
+    config/sectors.json
+
+Output:
+    CSV files inside the data/ folder.
+
+Example output files:
+    data/INDIA_Technology.csv
+    data/GLOBAL_Technology.csv
+    data/INDIA_Banking.csv
+    data/GLOBAL_Banking.csv
+    data/INDIA_Pharma.csv
+    data/GLOBAL_Pharma.csv
+    data/USDINR.csv
 
 Designed for:
-    Phase 1 of the Global India Sector Leadership Indicator project.
+    Phase 1 and Phase 2 of the Global India Sector Leadership Indicator project.
 """
 
 
@@ -29,14 +40,10 @@ import yfinance as yf
 # 2. Project Paths
 # ============================================================
 
-# ROOT_DIR points to the main project folder:
-# global-india-sector-indicator/
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-# Configuration file containing sector mappings
 CONFIG_PATH = ROOT_DIR / "config" / "sectors.json"
 
-# Folder where downloaded CSV files will be stored
 DATA_DIR = ROOT_DIR / "data"
 
 
@@ -44,15 +51,10 @@ DATA_DIR = ROOT_DIR / "data"
 # 3. Collector Settings
 # ============================================================
 
-# Download the last 2 years of daily data.
-# Later, this can be changed to "5y", "10y", etc.
 DEFAULT_PERIOD = "2y"
 DEFAULT_INTERVAL = "1d"
 
-# Yahoo Finance symbol for USD/INR
 CURRENCY_SYMBOL = "INR=X"
-
-# Output filename for USD/INR data
 CURRENCY_OUTPUT_NAME = "USDINR"
 
 
@@ -62,18 +64,22 @@ CURRENCY_OUTPUT_NAME = "USDINR"
 
 def load_sector_config(config_path: Path = CONFIG_PATH) -> dict:
     """
-    Load the sector configuration from config/sectors.json.
+    Load sector configuration from config/sectors.json.
 
-    Returns:
-        dict: Sector configuration.
-
-    Example structure:
+    Expected structure:
         {
             "Technology": {
+                "india_symbol": "^CNXIT",
                 "global_symbol": "XLK",
                 "currency_weight": 0.40
             }
         }
+
+    Args:
+        config_path (Path): Path to sectors.json.
+
+    Returns:
+        dict: Loaded sector configuration.
     """
     if not config_path.exists():
         raise FileNotFoundError(f"Missing config file: {config_path}")
@@ -83,52 +89,79 @@ def load_sector_config(config_path: Path = CONFIG_PATH) -> dict:
 
 
 # ============================================================
-# 5. Symbol Preparation
+# 5. Output Name Helpers
 # ============================================================
 
-def get_global_etf_symbols(sector_config: dict) -> list[str]:
+def clean_name_for_file(value: str) -> str:
     """
-    Extract unique global ETF symbols from the sector configuration.
+    Convert text into a simple filename-safe value.
 
     Example:
-        If sectors.json contains XLK, XLF, and XLV,
-        this function returns:
-        ["XLF", "XLK", "XLV"]
+        "Financial Services" becomes "Financial_Services"
+    """
+    return (
+        value.strip()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace("&", "and")
+    )
+
+
+def build_sector_output_name(region: str, sector_name: str) -> str:
+    """
+    Build a consistent CSV output name for sector data.
 
     Args:
-        sector_config (dict): Loaded sector configuration.
+        region (str): Either INDIA or GLOBAL.
+        sector_name (str): Sector name from config.
 
     Returns:
-        list[str]: Sorted list of unique global ETF symbols.
+        str: Filename without .csv.
     """
-    symbols = {
-        sector_details["global_symbol"]
-        for sector_details in sector_config.values()
-        if "global_symbol" in sector_details
-    }
+    clean_sector_name = clean_name_for_file(sector_name)
 
-    return sorted(symbols)
+    return f"{region}_{clean_sector_name}"
 
 
-def build_symbol_download_map(global_etf_symbols: list[str]) -> dict[str, str]:
+# ============================================================
+# 6. Symbol Preparation
+# ============================================================
+
+def build_symbol_download_map(sector_config: dict) -> dict[str, str]:
     """
-    Build a mapping of Yahoo Finance symbols to output CSV names.
+    Build a mapping of Yahoo Finance symbols to local CSV output names.
 
     Example:
         {
-            "XLK": "XLK",
-            "XLF": "XLF",
-            "XLV": "XLV",
+            "^CNXIT": "INDIA_Technology",
+            "XLK": "GLOBAL_Technology",
             "INR=X": "USDINR"
         }
 
     The key is the Yahoo Finance download symbol.
     The value is the local CSV filename without .csv.
     """
-    symbols_to_download = {
-        symbol: symbol
-        for symbol in global_etf_symbols
-    }
+    symbols_to_download = {}
+
+    for sector_name, sector_details in sector_config.items():
+        india_symbol = sector_details.get("india_symbol")
+        global_symbol = sector_details.get("global_symbol")
+
+        if india_symbol:
+            india_output_name = build_sector_output_name(
+                region="INDIA",
+                sector_name=sector_name,
+            )
+
+            symbols_to_download[india_symbol] = india_output_name
+
+        if global_symbol:
+            global_output_name = build_sector_output_name(
+                region="GLOBAL",
+                sector_name=sector_name,
+            )
+
+            symbols_to_download[global_symbol] = global_output_name
 
     symbols_to_download[CURRENCY_SYMBOL] = CURRENCY_OUTPUT_NAME
 
@@ -136,7 +169,7 @@ def build_symbol_download_map(global_etf_symbols: list[str]) -> dict[str, str]:
 
 
 # ============================================================
-# 6. Download Logic
+# 7. Download Logic
 # ============================================================
 
 def download_from_yfinance(
@@ -148,7 +181,7 @@ def download_from_yfinance(
     Download historical market data from Yahoo Finance.
 
     Args:
-        symbol (str): Yahoo Finance symbol, for example XLK or INR=X.
+        symbol (str): Yahoo Finance symbol, for example ^CNXIT, XLK, or INR=X.
         period (str): Time period to download, for example "2y".
         interval (str): Data interval, for example "1d".
 
@@ -173,7 +206,7 @@ def download_from_yfinance(
 
 
 # ============================================================
-# 7. Data Cleaning
+# 8. Data Cleaning
 # ============================================================
 
 def flatten_columns_if_needed(data: pd.DataFrame) -> pd.DataFrame:
@@ -277,7 +310,7 @@ def clean_downloaded_data(data: pd.DataFrame, symbol: str) -> pd.DataFrame:
 
 
 # ============================================================
-# 8. CSV Saving
+# 9. CSV Saving
 # ============================================================
 
 def save_data_to_csv(
@@ -306,7 +339,7 @@ def save_data_to_csv(
 
 
 # ============================================================
-# 9. Single Symbol Workflow
+# 10. Single Symbol Workflow
 # ============================================================
 
 def collect_single_symbol(
@@ -351,29 +384,26 @@ def collect_single_symbol(
 
 
 # ============================================================
-# 10. Main Collector Workflow
+# 11. Main Collector Workflow
 # ============================================================
 
-def collect_global_market_data() -> list[Path]:
+def collect_market_data() -> list[Path]:
     """
-    Main workflow for global ETF and currency collection.
+    Main workflow for Indian sector, global sector, and currency collection.
 
     Steps:
         1. Load sector configuration.
-        2. Extract global ETF symbols.
-        3. Add USD/INR currency symbol.
-        4. Download each symbol.
-        5. Save each dataset as CSV.
-        6. Report any failures.
+        2. Build Yahoo Finance symbol map.
+        3. Download each symbol.
+        4. Save each dataset as CSV.
+        5. Report any failures.
 
     Returns:
         list[Path]: List of saved CSV file paths.
     """
     sector_config = load_sector_config()
 
-    global_etf_symbols = get_global_etf_symbols(sector_config)
-
-    symbols_to_download = build_symbol_download_map(global_etf_symbols)
+    symbols_to_download = build_symbol_download_map(sector_config)
 
     saved_files = []
     failures = {}
@@ -404,8 +434,8 @@ def collect_global_market_data() -> list[Path]:
 
 
 # ============================================================
-# 11. Script Entry Point
+# 12. Script Entry Point
 # ============================================================
 
 if __name__ == "__main__":
-    collect_global_market_data()
+    collect_market_data()

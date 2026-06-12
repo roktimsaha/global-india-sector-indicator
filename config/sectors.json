@@ -1,13 +1,16 @@
 {
   "Technology": {
+    "india_symbol": "^CNXIT",
     "global_symbol": "XLK",
     "currency_weight": 0.40
   },
   "Banking": {
+    "india_symbol": "^NSEBANK",
     "global_symbol": "XLF",
     "currency_weight": 0.05
   },
   "Pharma": {
+    "india_symbol": "^CNXPHARMA",
     "global_symbol": "XLV",
     "currency_weight": 0.30
   }

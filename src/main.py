@@ -5,8 +5,8 @@ Purpose:
     Runs the Global India Sector Indicator application.
 
 Current Phase:
-    Phase 2 - Collect, validate, calculate returns, and calculate
-    momentum for global ETF and USD/INR currency data.
+    Phase 2 - Collect Indian sector data, global sector data, USD/INR data,
+    validate CSV files, calculate returns, and calculate momentum.
 """
 
 
@@ -16,7 +16,7 @@ Current Phase:
 
 from pathlib import Path
 
-from collectors.global_etf_collector import collect_global_market_data
+from collectors.market_data_collector import collect_market_data
 from validators.market_data_validator import validate_market_data_files
 from calculations.return_calculator import (
     calculate_return_summary,
@@ -48,10 +48,10 @@ def main() -> None:
     Run the main application workflow.
     """
     print("Global India Sector Indicator")
-    print("Starting global ETF and currency data collection...")
+    print("Starting market data collection...")
     print()
 
-    saved_files = collect_global_market_data()
+    saved_files = collect_market_data()
 
     print()
     validate_market_data_files(saved_files)
@@ -76,7 +76,7 @@ def main() -> None:
 
     print()
     print(
-        "Data collection, validation, return calculation, "
+        "Market data collection, validation, return calculation, "
         "and momentum calculation completed successfully."
     )
 
