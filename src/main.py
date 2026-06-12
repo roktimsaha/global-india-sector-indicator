@@ -6,7 +6,8 @@ Purpose:
 
 Current Phase:
     Phase 2 - Collect Indian sector data, global sector data, USD/INR data,
-    validate CSV files, calculate returns, and calculate momentum.
+    validate CSV files, calculate returns, calculate momentum, and calculate
+    relative strength.
 """
 
 
@@ -16,7 +17,7 @@ Current Phase:
 
 from pathlib import Path
 
-from collectors.market_data_collector import collect_market_data
+from collectors.market_data_collector import collect_market_data, load_sector_config
 from validators.market_data_validator import validate_market_data_files
 from calculations.return_calculator import (
     calculate_return_summary,
@@ -25,6 +26,10 @@ from calculations.return_calculator import (
 from calculations.momentum_calculator import (
     calculate_momentum_summary,
     save_momentum_summary,
+)
+from calculations.relative_strength_calculator import (
+    calculate_relative_strength_summary,
+    save_relative_strength_summary,
 )
 
 
@@ -37,6 +42,7 @@ DATA_DIR = ROOT_DIR / "data"
 
 RETURNS_SUMMARY_PATH = DATA_DIR / "returns_summary.csv"
 MOMENTUM_SUMMARY_PATH = DATA_DIR / "momentum_summary.csv"
+RELATIVE_STRENGTH_SUMMARY_PATH = DATA_DIR / "relative_strength_summary.csv"
 
 
 # ============================================================
@@ -50,6 +56,8 @@ def main() -> None:
     print("Global India Sector Indicator")
     print("Starting market data collection...")
     print()
+
+    sector_config = load_sector_config()
 
     saved_files = collect_market_data()
 
@@ -75,9 +83,22 @@ def main() -> None:
     )
 
     print()
+    relative_strength_summary = calculate_relative_strength_summary(
+        return_summary=return_summary,
+        sector_config=sector_config,
+    )
+
+    print()
+    save_relative_strength_summary(
+        relative_strength_summary=relative_strength_summary,
+        output_path=RELATIVE_STRENGTH_SUMMARY_PATH,
+    )
+
+    print()
     print(
         "Market data collection, validation, return calculation, "
-        "and momentum calculation completed successfully."
+        "momentum calculation, and relative strength calculation "
+        "completed successfully."
     )
 
 
