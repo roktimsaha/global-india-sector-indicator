@@ -5,7 +5,7 @@ Purpose:
     Runs the Global India Sector Indicator application.
 
 Current Phase:
-    Phase 1 - Collect global ETF and USD/INR currency data.
+    Phase 1 - Collect and validate global ETF and USD/INR currency data.
 """
 
 
@@ -14,6 +14,7 @@ Current Phase:
 # ============================================================
 
 from collectors.global_etf_collector import collect_global_market_data
+from validators.market_data_validator import validate_market_data_files
 
 
 # ============================================================
@@ -31,7 +32,10 @@ def main() -> None:
     saved_files = collect_global_market_data()
 
     print()
-    print("Data collection completed successfully.")
+    validate_market_data_files(saved_files)
+
+    print()
+    print("Data collection and validation completed successfully.")
     print("Saved files:")
 
     for file_path in saved_files:
