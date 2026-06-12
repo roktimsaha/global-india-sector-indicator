@@ -1,0 +1,17 @@
+{
+  "components": {
+    "relative_strength": {
+      "enabled": true,
+      "weight": 0.50
+    },
+    "momentum": {
+      "enabled": true,
+      "weight": 0.30
+    },
+    "currency": {
+      "enabled": true,
+      "weight": 0.20
+    }
+  },
+  "normalize_enabled_weights": true
+}

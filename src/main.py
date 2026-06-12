@@ -5,9 +5,7 @@ Purpose:
     Runs the Global India Sector Indicator application.
 
 Current Phase:
-    Phase 2 - Collect Indian sector data, global sector data, USD/INR data,
-    validate CSV files, calculate returns, calculate momentum, and calculate
-    relative strength.
+    Phase 3 - Calculate the first GILI sector ranking.
 """
 
 
@@ -31,6 +29,10 @@ from calculations.relative_strength_calculator import (
     calculate_relative_strength_summary,
     save_relative_strength_summary,
 )
+from calculations.gili_calculator import (
+    calculate_gili_summary,
+    save_gili_summary,
+)
 
 
 # ============================================================
@@ -43,6 +45,7 @@ DATA_DIR = ROOT_DIR / "data"
 RETURNS_SUMMARY_PATH = DATA_DIR / "returns_summary.csv"
 MOMENTUM_SUMMARY_PATH = DATA_DIR / "momentum_summary.csv"
 RELATIVE_STRENGTH_SUMMARY_PATH = DATA_DIR / "relative_strength_summary.csv"
+GILI_SUMMARY_PATH = DATA_DIR / "gili_summary.csv"
 
 
 # ============================================================
@@ -95,10 +98,23 @@ def main() -> None:
     )
 
     print()
+    gili_summary = calculate_gili_summary(
+        relative_strength_summary=relative_strength_summary,
+        momentum_summary=momentum_summary,
+        sector_config=sector_config,
+    )
+
+    print()
+    save_gili_summary(
+        gili_summary=gili_summary,
+        output_path=GILI_SUMMARY_PATH,
+    )
+
+    print()
     print(
         "Market data collection, validation, return calculation, "
-        "momentum calculation, and relative strength calculation "
-        "completed successfully."
+        "momentum calculation, relative strength calculation, "
+        "and GILI ranking completed successfully."
     )
 
 
