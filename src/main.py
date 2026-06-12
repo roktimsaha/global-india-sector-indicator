@@ -5,8 +5,8 @@ Purpose:
     Runs the Global India Sector Indicator application.
 
 Current Phase:
-    Phase 2 - Collect, validate, and calculate returns for global ETF
-    and USD/INR currency data.
+    Phase 2 - Collect, validate, calculate returns, and calculate
+    momentum for global ETF and USD/INR currency data.
 """
 
 
@@ -22,6 +22,10 @@ from calculations.return_calculator import (
     calculate_return_summary,
     save_return_summary,
 )
+from calculations.momentum_calculator import (
+    calculate_momentum_summary,
+    save_momentum_summary,
+)
 
 
 # ============================================================
@@ -30,7 +34,9 @@ from calculations.return_calculator import (
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
+
 RETURNS_SUMMARY_PATH = DATA_DIR / "returns_summary.csv"
+MOMENTUM_SUMMARY_PATH = DATA_DIR / "momentum_summary.csv"
 
 
 # ============================================================
@@ -60,7 +66,19 @@ def main() -> None:
     )
 
     print()
-    print("Data collection, validation, and return calculation completed successfully.")
+    momentum_summary = calculate_momentum_summary(return_summary)
+
+    print()
+    save_momentum_summary(
+        momentum_summary=momentum_summary,
+        output_path=MOMENTUM_SUMMARY_PATH,
+    )
+
+    print()
+    print(
+        "Data collection, validation, return calculation, "
+        "and momentum calculation completed successfully."
+    )
 
 
 # ============================================================
