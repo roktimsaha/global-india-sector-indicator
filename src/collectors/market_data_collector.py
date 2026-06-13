@@ -124,12 +124,87 @@ def build_sector_output_name(region: str, sector_name: str) -> str:
 
 
 # ============================================================
-# 6. Symbol Preparation
+# 6. Sector Config Validation and Symbol Preparation
 # ============================================================
+
+def is_sector_enabled(sector_details: dict) -> bool:
+    """
+    Check whether a sector is enabled.
+
+    Backward-compatible behavior:
+        If 'enabled' is missing, treat the sector as enabled.
+    """
+    return sector_details.get("enabled", True)
+
+
+def validate_enabled_sector_config(
+    sector_name: str,
+    sector_details: dict,
+) -> None:
+    """
+    Validate required fields for one enabled sector.
+
+    Disabled sectors are allowed to have incomplete or unverified symbols.
+    Enabled sectors must be complete.
+    """
+    required_fields = [
+        "india_symbol",
+        "global_symbol",
+        "currency_weight",
+        "currency_direction",
+        "enabled",
+    ]
+
+    missing_fields = [
+        field for field in required_fields
+        if field not in sector_details
+    ]
+
+    if missing_fields:
+        raise ValueError(
+            f"Enabled sector '{sector_name}' is missing fields: {missing_fields}"
+        )
+
+    india_symbol = sector_details["india_symbol"]
+    global_symbol = sector_details["global_symbol"]
+
+    if not india_symbol or india_symbol == "VERIFY_WITH_YFINANCE":
+        raise ValueError(
+            f"Enabled sector '{sector_name}' has invalid india_symbol: "
+            f"{india_symbol}"
+        )
+
+    if not global_symbol or global_symbol == "VERIFY_WITH_YFINANCE":
+        raise ValueError(
+            f"Enabled sector '{sector_name}' has invalid global_symbol: "
+            f"{global_symbol}"
+        )
+
+    currency_weight = sector_details["currency_weight"]
+
+    if not isinstance(currency_weight, int | float):
+        raise ValueError(
+            f"Enabled sector '{sector_name}' has non-numeric currency_weight."
+        )
+
+    if currency_weight < 0 or currency_weight > 1:
+        raise ValueError(
+            f"Enabled sector '{sector_name}' currency_weight must be between 0 and 1."
+        )
+
+    currency_direction = sector_details["currency_direction"]
+
+    if currency_direction not in [-1, 0, 1]:
+        raise ValueError(
+            f"Enabled sector '{sector_name}' currency_direction must be -1, 0, or 1."
+        )
+
 
 def build_symbol_download_map(sector_config: dict) -> dict[str, str]:
     """
     Build a mapping of Yahoo Finance symbols to local CSV output names.
+
+    Only enabled sectors are downloaded.
 
     Example:
         {
@@ -138,35 +213,39 @@ def build_symbol_download_map(sector_config: dict) -> dict[str, str]:
             "INR=X": "USDINR"
         }
 
-    The key is the Yahoo Finance download symbol.
-    The value is the local CSV filename without .csv.
+    Disabled sectors are skipped.
     """
     symbols_to_download = {}
 
     for sector_name, sector_details in sector_config.items():
-        india_symbol = sector_details.get("india_symbol")
-        global_symbol = sector_details.get("global_symbol")
+        if not is_sector_enabled(sector_details):
+            print(f"Skipping disabled sector: {sector_name}")
+            continue
 
-        if india_symbol:
-            india_output_name = build_sector_output_name(
-                region="INDIA",
-                sector_name=sector_name,
-            )
+        validate_enabled_sector_config(
+            sector_name=sector_name,
+            sector_details=sector_details,
+        )
 
-            symbols_to_download[india_symbol] = india_output_name
+        india_symbol = sector_details["india_symbol"]
+        global_symbol = sector_details["global_symbol"]
 
-        if global_symbol:
-            global_output_name = build_sector_output_name(
-                region="GLOBAL",
-                sector_name=sector_name,
-            )
+        india_output_name = build_sector_output_name(
+            region="INDIA",
+            sector_name=sector_name,
+        )
 
-            symbols_to_download[global_symbol] = global_output_name
+        global_output_name = build_sector_output_name(
+            region="GLOBAL",
+            sector_name=sector_name,
+        )
+
+        symbols_to_download[india_symbol] = india_output_name
+        symbols_to_download[global_symbol] = global_output_name
 
     symbols_to_download[CURRENCY_SYMBOL] = CURRENCY_OUTPUT_NAME
 
     return symbols_to_download
-
 
 # ============================================================
 # 7. Download Logic
