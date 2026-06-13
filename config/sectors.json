@@ -2,16 +2,25 @@
   "Technology": {
     "india_symbol": "^CNXIT",
     "global_symbol": "XLK",
-    "currency_weight": 0.40
+    "currency_weight": 0.40,
+    "currency_direction": 1,
+    "benchmark_quality": "High",
+    "enabled": true
   },
   "Banking": {
     "india_symbol": "^NSEBANK",
     "global_symbol": "XLF",
-    "currency_weight": 0.05
+    "currency_weight": 0.05,
+    "currency_direction": 0,
+    "benchmark_quality": "High",
+    "enabled": true
   },
   "Pharma": {
     "india_symbol": "^CNXPHARMA",
     "global_symbol": "XLV",
-    "currency_weight": 0.30
+    "currency_weight": 0.30,
+    "currency_direction": 1,
+    "benchmark_quality": "High",
+    "enabled": true
   }
 }

@@ -1,8 +1,29 @@
 {
+  "formula_version": "GILI_V2_EXCESS_RETURN",
+
+  "return_periods": {
+    "1M": 21,
+    "3M": 63,
+    "6M": 126
+  },
+
+  "period_weights": {
+    "relative_strength": {
+      "1M": 0.30,
+      "3M": 0.40,
+      "6M": 0.30
+    },
+    "momentum": {
+      "1M": 0.30,
+      "3M": 0.40,
+      "6M": 0.30
+    }
+  },
+
   "components": {
     "relative_strength": {
       "enabled": true,
-      "weight": 0.50
+      "weight": 0.55
     },
     "momentum": {
       "enabled": true,
@@ -10,8 +31,16 @@
     },
     "currency": {
       "enabled": true,
-      "weight": 0.20
+      "weight": 0.15
     }
   },
+
+  "normalization": {
+    "method": "winsorized_minmax",
+    "lower_percentile": 5,
+    "upper_percentile": 95,
+    "equal_value_score": 50
+  },
+
   "normalize_enabled_weights": true
 }
