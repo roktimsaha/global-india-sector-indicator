@@ -4,27 +4,25 @@ Relative Strength Calculator
 Purpose:
     Compares Indian sector returns against global sector returns.
 
-Formula:
-    Relative Strength = India Sector Return / Global Sector Return
+GILI v2 Formula:
+    Excess Relative Strength = Indian Sector Return - Global Sector Return
 
 Current periods:
     1-month, 3-month, and 6-month returns.
 
 Composite formula:
-    Relative Strength Composite =
-        0.5 * Relative_Strength_1M
-        + 0.3 * Relative_Strength_3M
-        + 0.2 * Relative_Strength_6M
+    Relative_Strength_Raw =
+        0.30 * Excess_RS_1M
+        + 0.40 * Excess_RS_3M
+        + 0.30 * Excess_RS_6M
 
 Input:
     1. Return summary DataFrame created by return_calculator.py
     2. Sector config loaded from config/sectors.json
+    3. GILI settings loaded from config/gili_settings.json
 
 Output:
     data/relative_strength_summary.csv
-
-Designed for:
-    Phase 2 of the Global India Sector Leadership Indicator project.
 """
 
 
@@ -33,29 +31,74 @@ Designed for:
 # ============================================================
 
 from pathlib import Path
+import json
 
 import pandas as pd
 
 
 # ============================================================
-# 2. Relative Strength Settings
+# 2. Project Paths
 # ============================================================
 
-RETURN_COLUMNS = [
-    "Return_1M",
-    "Return_3M",
-    "Return_6M",
-]
+ROOT_DIR = Path(__file__).resolve().parents[2]
+GILI_SETTINGS_PATH = ROOT_DIR / "config" / "gili_settings.json"
 
-RELATIVE_STRENGTH_WEIGHTS = {
-    "Relative_Strength_1M": 0.50,
-    "Relative_Strength_3M": 0.30,
-    "Relative_Strength_6M": 0.20,
+
+# ============================================================
+# 3. Default Settings
+# ============================================================
+
+DEFAULT_RELATIVE_STRENGTH_PERIOD_WEIGHTS = {
+    "1M": 0.30,
+    "3M": 0.40,
+    "6M": 0.30,
+}
+
+RETURN_COLUMNS_BY_PERIOD = {
+    "1M": "Return_1M",
+    "3M": "Return_3M",
+    "6M": "Return_6M",
 }
 
 
 # ============================================================
-# 3. Name Helpers
+# 4. Settings Loading
+# ============================================================
+
+def load_gili_settings(settings_path: Path = GILI_SETTINGS_PATH) -> dict:
+    """
+    Load GILI settings from config/gili_settings.json.
+    """
+    if not settings_path.exists():
+        return {}
+
+    with settings_path.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def get_relative_strength_period_weights(
+    gili_settings: dict | None = None,
+) -> dict:
+    """
+    Get relative strength period weights from config.
+
+    Falls back to:
+        1M = 0.30
+        3M = 0.40
+        6M = 0.30
+    """
+    if gili_settings is None:
+        gili_settings = load_gili_settings()
+
+    return (
+        gili_settings
+        .get("period_weights", {})
+        .get("relative_strength", DEFAULT_RELATIVE_STRENGTH_PERIOD_WEIGHTS)
+    )
+
+
+# ============================================================
+# 5. Name Helpers
 # ============================================================
 
 def clean_name_for_file(value: str) -> str:
@@ -63,9 +106,6 @@ def clean_name_for_file(value: str) -> str:
     Convert text into a simple filename-safe value.
 
     This must match the naming style used by market_data_collector.py.
-
-    Example:
-        "Financial Services" becomes "Financial_Services"
     """
     return (
         value.strip()
@@ -82,15 +122,6 @@ def build_sector_symbol_name(region: str, sector_name: str) -> str:
     Examples:
         INDIA_Technology
         GLOBAL_Technology
-        INDIA_Banking
-        GLOBAL_Banking
-
-    Args:
-        region (str): INDIA or GLOBAL.
-        sector_name (str): Sector name from config.
-
-    Returns:
-        str: Symbol name used in return summary.
     """
     clean_sector_name = clean_name_for_file(sector_name)
 
@@ -98,21 +129,29 @@ def build_sector_symbol_name(region: str, sector_name: str) -> str:
 
 
 # ============================================================
-# 4. Input Validation
+# 6. Sector Helpers
+# ============================================================
+
+def is_sector_enabled(sector_details: dict) -> bool:
+    """
+    Check whether a sector is enabled.
+
+    Backward-compatible behavior:
+        If 'enabled' is missing, treat sector as enabled.
+    """
+    return sector_details.get("enabled", True)
+
+
+# ============================================================
+# 7. Input Validation
 # ============================================================
 
 def validate_return_summary(return_summary: pd.DataFrame) -> None:
     """
     Validate that the return summary has the columns needed for
     relative strength calculations.
-
-    Args:
-        return_summary (pd.DataFrame): Return summary table.
-
-    Raises:
-        ValueError: If required columns are missing.
     """
-    required_columns = ["Symbol"] + RETURN_COLUMNS
+    required_columns = ["Symbol"] + list(RETURN_COLUMNS_BY_PERIOD.values())
 
     missing_columns = [
         column for column in required_columns
@@ -127,17 +166,16 @@ def validate_return_summary(return_summary: pd.DataFrame) -> None:
 
 def validate_sector_config(sector_config: dict) -> None:
     """
-    Validate that each sector has Indian and global symbols.
+    Validate enabled sectors.
 
-    Args:
-        sector_config (dict): Loaded sector configuration.
-
-    Raises:
-        ValueError: If any sector is missing required fields.
+    Disabled sectors are ignored.
     """
     failures = {}
 
     for sector_name, sector_details in sector_config.items():
+        if not is_sector_enabled(sector_details):
+            continue
+
         missing_fields = []
 
         if "india_symbol" not in sector_details:
@@ -154,7 +192,7 @@ def validate_sector_config(sector_config: dict) -> None:
 
 
 # ============================================================
-# 5. Return Summary Row Selection
+# 8. Return Summary Row Selection
 # ============================================================
 
 def get_symbol_return_row(
@@ -163,16 +201,6 @@ def get_symbol_return_row(
 ) -> pd.Series:
     """
     Get one row from the return summary for a symbol.
-
-    Args:
-        return_summary (pd.DataFrame): Return summary table.
-        symbol_name (str): Symbol name, for example INDIA_Technology.
-
-    Returns:
-        pd.Series: Matching return summary row.
-
-    Raises:
-        ValueError: If the symbol is not found.
     """
     matching_rows = return_summary[
         return_summary["Symbol"] == symbol_name
@@ -185,57 +213,42 @@ def get_symbol_return_row(
 
 
 # ============================================================
-# 6. Relative Strength Calculation
+# 9. Excess Relative Strength Calculation
 # ============================================================
 
-def calculate_relative_strength_value(
+def calculate_excess_return(
     india_return: float,
     global_return: float,
 ) -> float | None:
     """
-    Calculate one relative strength value.
+    Calculate excess return.
 
     Formula:
-        India Return / Global Return
-
-    Args:
-        india_return (float): Indian sector return.
-        global_return (float): Global sector return.
-
-    Returns:
-        float | None: Relative strength value, or None if not calculable.
+        Excess Return = Indian Sector Return - Global Sector Return
     """
     if pd.isna(india_return) or pd.isna(global_return):
         return None
 
-    if global_return == 0:
-        return None
-
-    return india_return / global_return
+    return india_return - global_return
 
 
-def calculate_weighted_relative_strength(result: dict) -> float | None:
+def calculate_weighted_relative_strength_raw(
+    result: dict,
+    period_weights: dict,
+) -> float | None:
     """
-    Calculate weighted relative strength composite score.
-
-    Args:
-        result (dict): Result dictionary for one sector.
-
-    Returns:
-        float | None: Weighted relative strength composite.
+    Calculate weighted excess relative strength.
     """
-    values = [
-        result[column]
-        for column in RELATIVE_STRENGTH_WEIGHTS
-    ]
+    weighted_value = 0.0
 
-    if any(value is None or pd.isna(value) for value in values):
-        return None
+    for period_label, weight in period_weights.items():
+        excess_column = f"Excess_RS_{period_label}"
+        excess_value = result.get(excess_column)
 
-    weighted_value = sum(
-        RELATIVE_STRENGTH_WEIGHTS[column] * result[column]
-        for column in RELATIVE_STRENGTH_WEIGHTS
-    )
+        if excess_value is None or pd.isna(excess_value):
+            return None
+
+        weighted_value += weight * excess_value
 
     return weighted_value
 
@@ -244,17 +257,10 @@ def calculate_relative_strength_for_sector(
     sector_name: str,
     sector_details: dict,
     return_summary: pd.DataFrame,
+    period_weights: dict,
 ) -> dict:
     """
-    Calculate relative strength for one sector.
-
-    Args:
-        sector_name (str): Sector name from config.
-        sector_details (dict): Sector details from config.
-        return_summary (pd.DataFrame): Return summary table.
-
-    Returns:
-        dict: Relative strength result for one sector.
+    Calculate excess relative strength for one sector.
     """
     india_symbol_name = build_sector_symbol_name(
         region="INDIA",
@@ -284,30 +290,36 @@ def calculate_relative_strength_for_sector(
         "Global_Return_Symbol": global_symbol_name,
     }
 
-    for return_column in RETURN_COLUMNS:
-        period_label = return_column.replace("Return_", "")
-
+    for period_label, return_column in RETURN_COLUMNS_BY_PERIOD.items():
         india_return = india_row[return_column]
         global_return = global_row[return_column]
 
-        relative_strength = calculate_relative_strength_value(
+        excess_return = calculate_excess_return(
             india_return=india_return,
             global_return=global_return,
         )
 
         result[f"India_Return_{period_label}"] = india_return
         result[f"Global_Return_{period_label}"] = global_return
-        result[f"Relative_Strength_{period_label}"] = relative_strength
+        result[f"Excess_RS_{period_label}"] = excess_return
 
-    result["Relative_Strength_Composite"] = calculate_weighted_relative_strength(
-        result
+    relative_strength_raw = calculate_weighted_relative_strength_raw(
+        result=result,
+        period_weights=period_weights,
     )
+
+    result["Relative_Strength_Raw"] = relative_strength_raw
+
+    # Temporary compatibility column.
+    # Current gili_calculator.py still reads Relative_Strength_Composite.
+    # We will update gili_calculator.py in the next milestone.
+    result["Relative_Strength_Composite"] = relative_strength_raw
 
     return result
 
 
 # ============================================================
-# 7. Relative Strength Summary Workflow
+# 10. Relative Strength Summary Workflow
 # ============================================================
 
 def calculate_relative_strength_summary(
@@ -315,40 +327,42 @@ def calculate_relative_strength_summary(
     sector_config: dict,
 ) -> pd.DataFrame:
     """
-    Calculate relative strength summary for all configured sectors.
-
-    Args:
-        return_summary (pd.DataFrame): Return summary table.
-        sector_config (dict): Loaded sector configuration.
-
-    Returns:
-        pd.DataFrame: Relative strength summary table.
+    Calculate excess relative strength summary for all enabled sectors.
     """
     print("Calculating relative strength summary...")
 
     validate_return_summary(return_summary)
     validate_sector_config(sector_config)
 
+    gili_settings = load_gili_settings()
+
+    period_weights = get_relative_strength_period_weights(gili_settings)
+
     results = []
 
     for sector_name, sector_details in sector_config.items():
+        if not is_sector_enabled(sector_details):
+            print(f"Skipping disabled sector in relative strength: {sector_name}")
+            continue
+
         result = calculate_relative_strength_for_sector(
             sector_name=sector_name,
             sector_details=sector_details,
             return_summary=return_summary,
+            period_weights=period_weights,
         )
 
         results.append(result)
 
         print(
-            f"Calculated relative strength for {sector_name}: "
-            f"{format_relative_strength(result['Relative_Strength_Composite'])}"
+            f"Calculated excess relative strength for {sector_name}: "
+            f"{format_relative_strength(result['Relative_Strength_Raw'])}"
         )
 
     relative_strength_summary = pd.DataFrame(results)
 
     relative_strength_summary = relative_strength_summary.sort_values(
-        by="Relative_Strength_Composite",
+        by="Relative_Strength_Raw",
         ascending=False,
         na_position="last",
     )
@@ -357,27 +371,21 @@ def calculate_relative_strength_summary(
 
 
 # ============================================================
-# 8. Formatting Helpers
+# 11. Formatting Helpers
 # ============================================================
 
 def format_relative_strength(value: float | None) -> str:
     """
     Format relative strength value for terminal display.
-
-    Args:
-        value (float | None): Relative strength value.
-
-    Returns:
-        str: Human-readable value.
     """
     if value is None or pd.isna(value):
         return "N/A"
 
-    return f"{value:.2f}x"
+    return f"{value:.2%}"
 
 
 # ============================================================
-# 9. CSV Saving
+# 12. CSV Saving
 # ============================================================
 
 def save_relative_strength_summary(
@@ -386,13 +394,6 @@ def save_relative_strength_summary(
 ) -> Path:
     """
     Save relative strength summary to a CSV file.
-
-    Args:
-        relative_strength_summary (pd.DataFrame): Relative strength summary.
-        output_path (Path): Output CSV path.
-
-    Returns:
-        Path: Saved output path.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
