@@ -4,29 +4,15 @@ GILI Calculator
 Purpose:
     Calculates the Global India Sector Leadership Indicator score.
 
-Default formula:
+GILI v2 formula:
     GILI =
-        0.50 * Relative Strength Score
-        + 0.30 * Momentum Score
-        + 0.20 * Currency Score
+        Effective Relative Strength Weight * Relative Strength Score
+        + Effective Momentum Weight * Momentum Score
+        + Effective Currency Weight * Currency Score
 
-Configurable behavior:
-    Components can be enabled or disabled in:
-
-        config/gili_settings.json
-
-    Example:
-        Disable currency impact by setting:
-            "currency": {
-                "enabled": false,
-                "weight": 0.20
-            }
-
-    If normalize_enabled_weights is true, enabled component weights are
-    automatically rebalanced to total 1.0.
-
-Designed for:
-    Phase 3 of the Global India Sector Leadership Indicator project.
+Currency formula:
+    Currency_Impact_Raw =
+        USDINR_Momentum * currency_weight * currency_direction
 """
 
 
@@ -45,19 +31,19 @@ import pandas as pd
 # ============================================================
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-
 GILI_SETTINGS_PATH = ROOT_DIR / "config" / "gili_settings.json"
 
 
 # ============================================================
-# 3. GILI Settings
+# 3. Settings
 # ============================================================
 
 DEFAULT_GILI_SETTINGS = {
+    "formula_version": "GILI_V2_EXCESS_RETURN",
     "components": {
         "relative_strength": {
             "enabled": True,
-            "weight": 0.50,
+            "weight": 0.55,
         },
         "momentum": {
             "enabled": True,
@@ -65,7 +51,7 @@ DEFAULT_GILI_SETTINGS = {
         },
         "currency": {
             "enabled": True,
-            "weight": 0.20,
+            "weight": 0.15,
         },
     },
     "normalize_enabled_weights": True,
@@ -87,8 +73,6 @@ USDINR_SYMBOL_NAME = "USDINR"
 def clean_name_for_file(value: str) -> str:
     """
     Convert text into a simple filename-safe value.
-
-    This must match the naming style used by market_data_collector.py.
     """
     return (
         value.strip()
@@ -106,19 +90,18 @@ def build_india_return_symbol_name(sector_name: str) -> str:
         Technology becomes INDIA_Technology
     """
     clean_sector_name = clean_name_for_file(sector_name)
-
     return f"INDIA_{clean_sector_name}"
 
 
 # ============================================================
-# 5. GILI Settings Loading
+# 5. Settings Loading
 # ============================================================
 
 def load_gili_settings(settings_path: Path = GILI_SETTINGS_PATH) -> dict:
     """
-    Load GILI component settings.
+    Load GILI settings from config/gili_settings.json.
 
-    If config/gili_settings.json does not exist, default settings are used.
+    If the settings file does not exist, default settings are used.
     """
     if not settings_path.exists():
         return DEFAULT_GILI_SETTINGS
@@ -167,10 +150,23 @@ def validate_gili_settings(gili_settings: dict) -> None:
                 f"GILI component '{component_name}' is missing 'weight'."
             )
 
-        if component_settings["enabled"]:
+        enabled = component_settings["enabled"]
+        weight = component_settings["weight"]
+
+        if not isinstance(enabled, bool):
+            raise ValueError(
+                f"GILI component '{component_name}' enabled must be true or false."
+            )
+
+        if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+            raise ValueError(
+                f"GILI component '{component_name}' weight must be numeric."
+            )
+
+        if enabled:
             enabled_count += 1
 
-        if component_settings["weight"] < 0:
+        if weight < 0:
             raise ValueError(
                 f"GILI component '{component_name}' weight cannot be negative."
             )
@@ -226,64 +222,98 @@ def validate_relative_strength_summary(
 ) -> None:
     """
     Validate required relative strength columns.
+
+    GILI v2 prefers Relative_Strength_Raw.
+    Relative_Strength_Composite is supported temporarily for compatibility.
     """
-    required_columns = [
-        "Sector",
-        "Relative_Strength_Composite",
-    ]
+    if "Sector" not in relative_strength_summary.columns:
+        raise ValueError("Relative strength summary is missing column: Sector")
 
-    missing_columns = [
-        column for column in required_columns
-        if column not in relative_strength_summary.columns
-    ]
+    has_v2_column = "Relative_Strength_Raw" in relative_strength_summary.columns
+    has_legacy_column = (
+        "Relative_Strength_Composite" in relative_strength_summary.columns
+    )
 
-    if missing_columns:
+    if not has_v2_column and not has_legacy_column:
         raise ValueError(
-            "Relative strength summary is missing required columns: "
-            f"{missing_columns}"
+            "Relative strength summary must contain either "
+            "Relative_Strength_Raw or Relative_Strength_Composite."
         )
 
 
 def validate_momentum_summary(momentum_summary: pd.DataFrame) -> None:
     """
     Validate required momentum columns.
+
+    GILI v2 prefers Momentum_Raw.
+    Momentum is supported temporarily for compatibility.
     """
-    required_columns = [
-        "Symbol",
-        "Momentum",
-    ]
+    if "Symbol" not in momentum_summary.columns:
+        raise ValueError("Momentum summary is missing column: Symbol")
 
-    missing_columns = [
-        column for column in required_columns
-        if column not in momentum_summary.columns
-    ]
+    has_v2_column = "Momentum_Raw" in momentum_summary.columns
+    has_legacy_column = "Momentum" in momentum_summary.columns
 
-    if missing_columns:
+    if not has_v2_column and not has_legacy_column:
         raise ValueError(
-            f"Momentum summary is missing required columns: {missing_columns}"
+            "Momentum summary must contain either Momentum_Raw or Momentum."
         )
+
+
+def is_sector_enabled(sector_details: dict) -> bool:
+    """
+    Check whether a sector is enabled.
+
+    Backward-compatible behavior:
+        If 'enabled' is missing, treat sector as enabled.
+    """
+    return sector_details.get("enabled", True)
 
 
 def validate_sector_config(sector_config: dict) -> None:
     """
-    Validate that each sector has the fields needed for GILI.
+    Validate that each enabled sector has the fields needed for GILI.
     """
     failures = {}
 
     for sector_name, sector_details in sector_config.items():
+        if not is_sector_enabled(sector_details):
+            continue
+
         missing_fields = []
 
-        if "india_symbol" not in sector_details:
-            missing_fields.append("india_symbol")
+        required_fields = [
+            "india_symbol",
+            "global_symbol",
+            "currency_weight",
+            "currency_direction",
+        ]
 
-        if "global_symbol" not in sector_details:
-            missing_fields.append("global_symbol")
-
-        if "currency_weight" not in sector_details:
-            missing_fields.append("currency_weight")
+        for field in required_fields:
+            if field not in sector_details:
+                missing_fields.append(field)
 
         if missing_fields:
             failures[sector_name] = missing_fields
+            continue
+
+        currency_weight = sector_details["currency_weight"]
+        currency_direction = sector_details["currency_direction"]
+
+        if not isinstance(currency_weight, (int, float)) or isinstance(currency_weight, bool):
+            raise ValueError(
+                f"Sector '{sector_name}' currency_weight must be numeric."
+            )
+
+        if currency_weight < 0 or currency_weight > 1:
+            raise ValueError(
+                f"Sector '{sector_name}' currency_weight must be between 0 and 1."
+            )
+
+        if currency_direction not in [-1, 0, 1]:
+            raise ValueError(
+                f"Sector '{sector_name}' currency_direction must be -1, 0, or 1."
+            )
 
     if failures:
         raise ValueError(f"Sector config is missing required fields: {failures}")
@@ -307,7 +337,12 @@ def get_momentum_for_symbol(
     if matching_rows.empty:
         raise ValueError(f"Missing momentum row for symbol: {symbol_name}")
 
-    return matching_rows.iloc[0]["Momentum"]
+    row = matching_rows.iloc[0]
+
+    if "Momentum_Raw" in row.index:
+        return row["Momentum_Raw"]
+
+    return row["Momentum"]
 
 
 def get_relative_strength_for_sector(
@@ -315,7 +350,7 @@ def get_relative_strength_for_sector(
     sector_name: str,
 ) -> float:
     """
-    Get relative strength composite value for one sector.
+    Get relative strength raw value for one sector.
     """
     matching_rows = relative_strength_summary[
         relative_strength_summary["Sector"] == sector_name
@@ -326,7 +361,12 @@ def get_relative_strength_for_sector(
             f"Missing relative strength row for sector: {sector_name}"
         )
 
-    return matching_rows.iloc[0]["Relative_Strength_Composite"]
+    row = matching_rows.iloc[0]
+
+    if "Relative_Strength_Raw" in row.index:
+        return row["Relative_Strength_Raw"]
+
+    return row["Relative_Strength_Composite"]
 
 
 # ============================================================
@@ -341,6 +381,10 @@ def normalize_to_0_100(values: pd.Series) -> pd.Series:
         normalized = ((value - min_value) / (max_value - min_value)) * 100
 
     If all values are equal, every valid value receives a neutral score of 50.
+
+    Note:
+        This is still the simple min-max version.
+        Winsorized min-max will be added in the next milestone.
     """
     numeric_values = pd.to_numeric(values, errors="coerce")
 
@@ -365,18 +409,27 @@ def normalize_to_0_100(values: pd.Series) -> pd.Series:
 def calculate_currency_impact(
     usdinr_momentum: float,
     currency_weight: float,
+    currency_direction: int,
 ) -> float | None:
     """
     Calculate raw currency impact for one sector.
 
-    Logic:
-        If USDINR is rising, export-oriented sectors benefit more.
-        The sector currency_weight controls how much each sector is affected.
+    GILI v2 formula:
+        Currency_Impact_Raw =
+            USDINR_Momentum * currency_weight * currency_direction
+
+    Meaning:
+        currency_direction =  1 means INR weakness helps the sector
+        currency_direction = -1 means INR weakness hurts the sector
+        currency_direction =  0 means mostly neutral
     """
     if pd.isna(usdinr_momentum) or pd.isna(currency_weight):
         return None
 
-    return usdinr_momentum * currency_weight
+    if currency_direction not in [-1, 0, 1]:
+        raise ValueError("currency_direction must be -1, 0, or 1.")
+
+    return usdinr_momentum * currency_weight * currency_direction
 
 
 # ============================================================
@@ -391,7 +444,7 @@ def build_gili_base_rows(
     """
     Build raw GILI input rows before normalization.
 
-    Each row represents one sector.
+    Each row represents one enabled sector.
     """
     usdinr_momentum = get_momentum_for_symbol(
         momentum_summary=momentum_summary,
@@ -401,6 +454,10 @@ def build_gili_base_rows(
     rows = []
 
     for sector_name, sector_details in sector_config.items():
+        if not is_sector_enabled(sector_details):
+            print(f"Skipping disabled sector in GILI: {sector_name}")
+            continue
+
         india_return_symbol_name = build_india_return_symbol_name(sector_name)
 
         relative_strength = get_relative_strength_for_sector(
@@ -414,10 +471,12 @@ def build_gili_base_rows(
         )
 
         currency_weight = sector_details["currency_weight"]
+        currency_direction = sector_details["currency_direction"]
 
         currency_impact = calculate_currency_impact(
             usdinr_momentum=usdinr_momentum,
             currency_weight=currency_weight,
+            currency_direction=currency_direction,
         )
 
         rows.append(
@@ -430,9 +489,13 @@ def build_gili_base_rows(
                 "Momentum_Raw": momentum,
                 "USDINR_Momentum": usdinr_momentum,
                 "Currency_Weight": currency_weight,
+                "Currency_Direction": currency_direction,
                 "Currency_Impact_Raw": currency_impact,
             }
         )
+
+    if not rows:
+        raise ValueError("No enabled sectors available for GILI calculation.")
 
     return pd.DataFrame(rows)
 
@@ -464,18 +527,27 @@ def calculate_gili_scores(
         scored["Currency_Impact_Raw"]
     )
 
-    scored["Relative_Strength_Weight"] = effective_weights["relative_strength"]
-    scored["Momentum_Weight"] = effective_weights["momentum"]
-    scored["Currency_Weight_Effective"] = effective_weights["currency"]
+    # New internal effective weight columns.
+    scored["Effective_RS_Weight"] = effective_weights["relative_strength"]
+    scored["Effective_Momentum_Weight"] = effective_weights["momentum"]
+    scored["Effective_Currency_Weight"] = effective_weights["currency"]
 
-    scored["GILI_Score"] = 0.0
+    # Backward-compatible aliases required by the current report generator.
+    scored["Relative_Strength_Weight"] = scored["Effective_RS_Weight"]
+    scored["Momentum_Weight"] = scored["Effective_Momentum_Weight"]
+    scored["Currency_Weight_Effective"] = scored["Effective_Currency_Weight"]
+
+    scored["GILI"] = 0.0
 
     for component_name, component_weight in effective_weights.items():
         score_column = COMPONENT_COLUMN_MAP[component_name]
-        scored["GILI_Score"] += component_weight * scored[score_column]
+        scored["GILI"] += component_weight * scored[score_column]
+
+    # Backward-compatible alias required by the current report generator.
+    scored["GILI_Score"] = scored["GILI"]
 
     scored = scored.sort_values(
-        by="GILI_Score",
+        by="GILI",
         ascending=False,
         na_position="last",
     )
@@ -484,23 +556,42 @@ def calculate_gili_scores(
 
     scored["Rank"] = scored.index + 1
 
+    formula_version = gili_settings.get(
+        "formula_version",
+        "GILI_V2_EXCESS_RETURN",
+    )
+
+    scored["Formula_Version"] = formula_version
+
     ordered_columns = [
         "Rank",
         "Sector",
-        "GILI_Score",
+        "India_Symbol",
+        "Global_Symbol",
+
+        "Relative_Strength_Raw",
         "Relative_Strength_Score",
+        "Momentum_Raw",
         "Momentum_Score",
+        "Currency_Impact_Raw",
         "Currency_Score",
+
+        "Currency_Weight",
+        "Currency_Direction",
+        "USDINR_Momentum",
+
+        "Effective_RS_Weight",
+        "Effective_Momentum_Weight",
+        "Effective_Currency_Weight",
+
+        # Backward-compatible report-generator columns.
         "Relative_Strength_Weight",
         "Momentum_Weight",
         "Currency_Weight_Effective",
-        "Relative_Strength_Raw",
-        "Momentum_Raw",
-        "Currency_Impact_Raw",
-        "USDINR_Momentum",
-        "Currency_Weight",
-        "India_Symbol",
-        "Global_Symbol",
+
+        "GILI",
+        "GILI_Score",
+        "Formula_Version",
         "India_Return_Symbol",
     ]
 
@@ -553,7 +644,7 @@ def calculate_gili_summary(
     for _, row in gili_summary.iterrows():
         print(
             f"Rank {row['Rank']}: {row['Sector']} "
-            f"GILI={row['GILI_Score']:.2f}"
+            f"GILI={row['GILI']:.2f}"
         )
 
     return gili_summary
