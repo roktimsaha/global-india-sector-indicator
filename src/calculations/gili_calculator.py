@@ -13,6 +13,19 @@ GILI v2 formula:
 Currency formula:
     Currency_Impact_Raw =
         USDINR_Momentum * currency_weight * currency_direction
+
+Normalization:
+    Supports config-driven normalization.
+
+    Preferred GILI v2 method:
+        winsorized_minmax
+
+    This method:
+        1. Converts raw component values to numeric.
+        2. Calculates lower and upper percentile thresholds.
+        3. Clips values to those thresholds.
+        4. Applies min-max normalization to 0-100.
+        5. Assigns a neutral score when all valid values are equal.
 """
 
 
@@ -53,6 +66,12 @@ DEFAULT_GILI_SETTINGS = {
             "enabled": True,
             "weight": 0.15,
         },
+    },
+    "normalization": {
+        "method": "winsorized_minmax",
+        "lower_percentile": 5,
+        "upper_percentile": 95,
+        "equal_value_score": 50,
     },
     "normalize_enabled_weights": True,
 }
@@ -108,6 +127,87 @@ def load_gili_settings(settings_path: Path = GILI_SETTINGS_PATH) -> dict:
 
     with settings_path.open("r", encoding="utf-8") as file:
         return json.load(file)
+
+
+def get_normalization_settings(gili_settings: dict) -> dict:
+    """
+    Return normalization settings with safe defaults.
+
+    This makes the feature config-driven while still allowing the program
+    to run if the normalization block has not yet been added to config.
+    """
+    default_normalization = DEFAULT_GILI_SETTINGS["normalization"].copy()
+
+    user_normalization = gili_settings.get("normalization", {})
+
+    if user_normalization is None:
+        user_normalization = {}
+
+    normalization_settings = {
+        **default_normalization,
+        **user_normalization,
+    }
+
+    return normalization_settings
+
+
+def validate_normalization_settings(gili_settings: dict) -> None:
+    """
+    Validate normalization settings.
+    """
+    normalization_settings = get_normalization_settings(gili_settings)
+
+    method = normalization_settings.get("method")
+    lower_percentile = normalization_settings.get("lower_percentile")
+    upper_percentile = normalization_settings.get("upper_percentile")
+    equal_value_score = normalization_settings.get("equal_value_score")
+
+    supported_methods = [
+        "minmax",
+        "simple_minmax",
+        "winsorized_minmax",
+    ]
+
+    if method not in supported_methods:
+        raise ValueError(
+            "Unsupported normalization method. "
+            f"Got '{method}'. Supported methods: {supported_methods}"
+        )
+
+    if not isinstance(equal_value_score, (int, float)) or isinstance(equal_value_score, bool):
+        raise ValueError("normalization.equal_value_score must be numeric.")
+
+    if equal_value_score < 0 or equal_value_score > 100:
+        raise ValueError(
+            "normalization.equal_value_score must be between 0 and 100."
+        )
+
+    if method == "winsorized_minmax":
+        if not isinstance(lower_percentile, (int, float)) or isinstance(lower_percentile, bool):
+            raise ValueError(
+                "normalization.lower_percentile must be numeric."
+            )
+
+        if not isinstance(upper_percentile, (int, float)) or isinstance(upper_percentile, bool):
+            raise ValueError(
+                "normalization.upper_percentile must be numeric."
+            )
+
+        if lower_percentile < 0 or lower_percentile > 100:
+            raise ValueError(
+                "normalization.lower_percentile must be between 0 and 100."
+            )
+
+        if upper_percentile < 0 or upper_percentile > 100:
+            raise ValueError(
+                "normalization.upper_percentile must be between 0 and 100."
+            )
+
+        if lower_percentile >= upper_percentile:
+            raise ValueError(
+                "normalization.lower_percentile must be less than "
+                "normalization.upper_percentile."
+            )
 
 
 def validate_gili_settings(gili_settings: dict) -> None:
@@ -174,6 +274,8 @@ def validate_gili_settings(gili_settings: dict) -> None:
     if enabled_count == 0:
         raise ValueError("At least one GILI component must be enabled.")
 
+    validate_normalization_settings(gili_settings)
+
 
 def get_effective_component_weights(gili_settings: dict) -> dict:
     """
@@ -198,6 +300,9 @@ def get_effective_component_weights(gili_settings: dict) -> dict:
         "normalize_enabled_weights",
         True,
     )
+
+    if not isinstance(normalize_enabled_weights, bool):
+        raise ValueError("normalize_enabled_weights must be true or false.")
 
     if normalize_enabled_weights:
         total_enabled_weight = sum(effective_weights.values())
@@ -373,18 +478,17 @@ def get_relative_strength_for_sector(
 # 8. Normalization
 # ============================================================
 
-def normalize_to_0_100(values: pd.Series) -> pd.Series:
+def normalize_minmax(
+    values: pd.Series,
+    equal_value_score: float = 50,
+) -> pd.Series:
     """
-    Normalize a numeric series to a 0-100 scale.
+    Normalize a numeric series to a 0-100 scale using simple min-max.
 
     Formula:
         normalized = ((value - min_value) / (max_value - min_value)) * 100
 
-    If all values are equal, every valid value receives a neutral score of 50.
-
-    Note:
-        This is still the simple min-max version.
-        Winsorized min-max will be added in the next milestone.
+    If all valid values are equal, every valid value receives equal_value_score.
     """
     numeric_values = pd.to_numeric(values, errors="coerce")
 
@@ -396,10 +500,91 @@ def normalize_to_0_100(values: pd.Series) -> pd.Series:
 
     if max_value == min_value:
         return numeric_values.apply(
-            lambda value: 50 if not pd.isna(value) else None
+            lambda value: equal_value_score if not pd.isna(value) else None
         )
 
     return ((numeric_values - min_value) / (max_value - min_value)) * 100
+
+
+def normalize_winsorized_minmax(
+    values: pd.Series,
+    lower_percentile: float = 5,
+    upper_percentile: float = 95,
+    equal_value_score: float = 50,
+) -> pd.Series:
+    """
+    Normalize a numeric series to a 0-100 scale using winsorized min-max.
+
+    Steps:
+        1. Convert values to numeric.
+        2. Calculate lower and upper percentile thresholds.
+        3. Clip values to those thresholds.
+        4. Apply min-max normalization to clipped values.
+        5. If all valid clipped values are equal, assign equal_value_score.
+    """
+    numeric_values = pd.to_numeric(values, errors="coerce")
+
+    valid_values = numeric_values.dropna()
+
+    if valid_values.empty:
+        return numeric_values
+
+    lower_threshold = valid_values.quantile(lower_percentile / 100)
+    upper_threshold = valid_values.quantile(upper_percentile / 100)
+
+    clipped_values = numeric_values.clip(
+        lower=lower_threshold,
+        upper=upper_threshold,
+    )
+
+    min_value = clipped_values.min()
+    max_value = clipped_values.max()
+
+    if pd.isna(min_value) or pd.isna(max_value):
+        return clipped_values
+
+    if max_value == min_value:
+        return clipped_values.apply(
+            lambda value: equal_value_score if not pd.isna(value) else None
+        )
+
+    return ((clipped_values - min_value) / (max_value - min_value)) * 100
+
+
+def normalize_to_0_100(
+    values: pd.Series,
+    gili_settings: dict,
+) -> pd.Series:
+    """
+    Normalize a numeric series to a 0-100 score using config settings.
+
+    Supported methods:
+        - minmax
+        - simple_minmax
+        - winsorized_minmax
+    """
+    normalization_settings = get_normalization_settings(gili_settings)
+
+    method = normalization_settings["method"]
+    lower_percentile = normalization_settings["lower_percentile"]
+    upper_percentile = normalization_settings["upper_percentile"]
+    equal_value_score = normalization_settings["equal_value_score"]
+
+    if method in ["minmax", "simple_minmax"]:
+        return normalize_minmax(
+            values=values,
+            equal_value_score=equal_value_score,
+        )
+
+    if method == "winsorized_minmax":
+        return normalize_winsorized_minmax(
+            values=values,
+            lower_percentile=lower_percentile,
+            upper_percentile=upper_percentile,
+            equal_value_score=equal_value_score,
+        )
+
+    raise ValueError(f"Unsupported normalization method: {method}")
 
 
 # ============================================================
@@ -514,17 +699,21 @@ def calculate_gili_scores(
     scored = gili_summary.copy()
 
     effective_weights = get_effective_component_weights(gili_settings)
+    normalization_settings = get_normalization_settings(gili_settings)
 
     scored["Relative_Strength_Score"] = normalize_to_0_100(
-        scored["Relative_Strength_Raw"]
+        values=scored["Relative_Strength_Raw"],
+        gili_settings=gili_settings,
     )
 
     scored["Momentum_Score"] = normalize_to_0_100(
-        scored["Momentum_Raw"]
+        values=scored["Momentum_Raw"],
+        gili_settings=gili_settings,
     )
 
     scored["Currency_Score"] = normalize_to_0_100(
-        scored["Currency_Impact_Raw"]
+        values=scored["Currency_Impact_Raw"],
+        gili_settings=gili_settings,
     )
 
     # New internal effective weight columns.
@@ -562,6 +751,10 @@ def calculate_gili_scores(
     )
 
     scored["Formula_Version"] = formula_version
+    scored["Normalization_Method"] = normalization_settings["method"]
+    scored["Normalization_Lower_Percentile"] = normalization_settings["lower_percentile"]
+    scored["Normalization_Upper_Percentile"] = normalization_settings["upper_percentile"]
+    scored["Normalization_Equal_Value_Score"] = normalization_settings["equal_value_score"]
 
     ordered_columns = [
         "Rank",
@@ -592,6 +785,12 @@ def calculate_gili_scores(
         "GILI",
         "GILI_Score",
         "Formula_Version",
+
+        "Normalization_Method",
+        "Normalization_Lower_Percentile",
+        "Normalization_Upper_Percentile",
+        "Normalization_Equal_Value_Score",
+
         "India_Return_Symbol",
     ]
 
@@ -622,12 +821,21 @@ def calculate_gili_summary(
     validate_gili_settings(gili_settings)
 
     effective_weights = get_effective_component_weights(gili_settings)
+    normalization_settings = get_normalization_settings(gili_settings)
 
     print(
         "Using GILI component weights: "
         f"Relative Strength={effective_weights['relative_strength']:.2%}, "
         f"Momentum={effective_weights['momentum']:.2%}, "
         f"Currency={effective_weights['currency']:.2%}"
+    )
+
+    print(
+        "Using normalization method: "
+        f"{normalization_settings['method']} "
+        f"(lower={normalization_settings['lower_percentile']}, "
+        f"upper={normalization_settings['upper_percentile']}, "
+        f"equal_value_score={normalization_settings['equal_value_score']})"
     )
 
     gili_base_rows = build_gili_base_rows(
